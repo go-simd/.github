@@ -22,13 +22,23 @@ same signatures, **byte-identical output** (and, where applicable,
 byte-identical *errors*) to the stdlib package it accelerates, with the short
 tail delegated back to the standard library so results match exactly.
 
-**Six architectures, one generator.** A single [go-asmgen][asmgen] builder
-(`v0.5.0`) over a shared ABI0 layout emits the kernels for all six targets;
-`cmd/asm` encodes them. The ppc64le and s390x backends are
-**qemu-validated for correctness** — official test vectors and byte-identical
-differential fuzz, run under `qemu-user` — with **native throughput pending**
-(no GitHub-hosted POWER/Z runner yet); the headline perf numbers below are the
-native amd64/arm64 measurements and are *not* extrapolated to ppc64le/s390x.
+**Six SIMD targets, validated on seven.** A single [go-asmgen][asmgen] builder
+(`v0.5.0`) over a shared ABI0 layout emits the kernels for all six SIMD targets;
+`cmd/asm` encodes them. **ppc64le is now measured on real silicon** — a POWER10
+host on the [GCC Compile Farm][cfarm] (VSX, Go 1.26.4, June 2026) — confirming
+the VSX kernels are not merely correct but fast: matchlen **6.3× scalar**,
+streamvbyte decode **11.9×**, hex encode **7.6×**, utf8 validate **7×**,
+crc64 **5.7×**. The s390x backend stays **qemu-validated for correctness**
+— official test vectors and byte-identical differential fuzz on the big-endian
+target — with **native throughput pending** (no GitHub-hosted IBM Z runner yet).
+And beyond the six SIMD targets, the whole suite is now **build- and
+test-validated on a seventh architecture, ppc64 (big-endian)**, on real POWER9
+silicon: the portable fallback path proven bit-exact on a big-endian target
+*distinct from* s390x's own vector kernel. SIMD acceleration stays on six
+targets (ppc64 BE has no VSX build tag, so it runs the generic path); proven
+correctness now spans seven.
+
+[cfarm]: https://portal.cfarm.net/
 
 Two results from the six-arch port are worth singling out:
 
@@ -83,9 +93,11 @@ such. The credibility is the honesty.
 > error-identical). **matchlen**, **bitpack**, **popcount**, **histogram**,
 > **streamvbyte**, **xxhash**, **floats**, **bitset**, **int8dot**,
 > **levenshtein** accelerate primitives the standard library exposes only
-> per-word or not at all, with an oracle as the reference. Across the org, on
-> **ppc64le** and **s390x** the kernels are **QEMU-validated for correctness;
-> native perf is pending** real POWER / IBM Z hardware (no GitHub-hosted runner).
+> per-word or not at all, with an oracle as the reference. Across the org,
+> **ppc64le is now natively measured** (real POWER10, GCC Compile Farm, June 2026);
+> **s390x stays QEMU-validated for correctness with native perf pending** (no
+> GitHub-hosted IBM Z runner); and the suite additionally builds and passes its
+> differential + fuzz tests on a **seventh arch, ppc64 big-endian**, on real POWER9.
 > The five newest repos — **ascii**, **levenshtein**, **bitset**, **int8dot**,
 > **jsonvalidate** — round the suite out to **20**: **jsonvalidate** is the only
 > SIMD JSON validator covering all six arches (byte-identical to
@@ -118,12 +130,17 @@ correct and measured honestly**. Every repo follows the same pipeline:
    Differential tests + fuzzing against the stdlib/oracle reference run on a
    **real-AVX2 x86-64 host** (Rosetta hides AVX2, so it is never trusted for
    amd64), **native arm64**, and **riscv64 / loong64 / ppc64le / s390x under
-   `qemu-user`** (debian:trixie, `QEMU_CPU=power9` / `qemu`). ppc64le and s390x
-   are **qemu-validated for correctness only** — official vectors and
-   byte-identical fuzz, including on **big-endian s390x** — with **native
-   throughput pending** (no GitHub-hosted POWER/Z runner). The headline
-   benchmark numbers come from **native CI** (amd64/arm64), never from emulation,
-   and are not extrapolated to ppc64le/s390x.
+   `qemu-user`** (debian:trixie, `QEMU_CPU=power9` / `qemu`). Correctness is
+   additionally confirmed on **real silicon via the [GCC Compile Farm][cfarm]**:
+   **ppc64le on a POWER10 host** (now with native throughput numbers — see
+   above) and **ppc64 big-endian on a POWER9 host** (a seventh validated arch:
+   the generic fallback path proven bit-exact big-endian, beyond s390x's vector
+   kernel). **s390x** alone remains **qemu-validated for correctness only** —
+   official vectors and byte-identical fuzz on the big-endian target — with
+   **native throughput pending** (no GitHub-hosted IBM Z runner). The headline
+   in-CI benchmark numbers come from **native CI** (amd64/arm64) and the
+   **POWER10 cfarm host** (ppc64le), never from emulation, and s390x is not
+   extrapolated.
 5. **100% statement coverage**, enforced as a CI gate on every repo and every
    arch job — including every dispatch branch (AVX2 / SSE / POPCNT / scalar
    fallback), driven directly by force tests. *(The generated `.s` kernels are
