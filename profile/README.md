@@ -24,11 +24,18 @@ tail delegated back to the standard library so results match exactly.
 
 **Six SIMD targets, validated on seven.** A single [go-asmgen][asmgen] builder
 (`v0.5.0`) over a shared ABI0 layout emits the kernels for all six SIMD targets;
-`cmd/asm` encodes them. **ppc64le is now measured on real silicon** — a POWER10
-host on the [GCC Compile Farm][cfarm] (VSX, Go 1.26.4, June 2026) — confirming
-the VSX kernels are not merely correct but fast: matchlen **6.3× scalar**,
-streamvbyte decode **11.9×**, hex encode **7.6×**, utf8 validate **7×**,
-crc64 **5.7×**. The s390x backend stays **qemu-validated for correctness**
+`cmd/asm` encodes them. **ppc64le and riscv64 are now measured on real
+silicon** — a POWER10 host and a SpacemiT X60 (RVV 1.0) board on the [GCC
+Compile Farm][cfarm] (Go 1.26.4, June 2026). On **ppc64le (VSX)** the kernels
+are not merely correct but fast: matchlen **6.3× scalar**, streamvbyte decode
+**11.9×**, hex encode **7.6×**, utf8 validate **7×**, crc64 **5.7×**. On
+**riscv64 (RVV)** the picture is honestly split by microarchitecture: on this
+low-power *in-order* core the arithmetic-bound kernels win big — int8dot
+**9.1×**, matchlen **5.8×**, jsonvalidate **5.2×**, streamvbyte **4.5×**,
+ascii85 **4.1×**, adler32 **2.4×** (beating `mhr3`) — while the byte-shuffle
+kernels (base64, hex, utf8) sit at **scalar parity** there, and `barakmich`'s
+SWAR popcount edges ours; the shuffle wins remain on amd64/arm64/ppc64le. The
+s390x backend stays **qemu-validated for correctness**
 — official test vectors and byte-identical differential fuzz on the big-endian
 target — with **native throughput pending** (no GitHub-hosted IBM Z runner yet).
 And beyond the six SIMD targets, the whole suite is now **build- and
@@ -94,7 +101,9 @@ such. The credibility is the honesty.
 > **streamvbyte**, **xxhash**, **floats**, **bitset**, **int8dot**,
 > **levenshtein** accelerate primitives the standard library exposes only
 > per-word or not at all, with an oracle as the reference. Across the org,
-> **ppc64le is now natively measured** (real POWER10, GCC Compile Farm, June 2026);
+> **ppc64le and riscv64 are now natively measured** (real POWER10 + a SpacemiT
+> X60 RVV board, GCC Compile Farm, June 2026 — riscv64 wins on arithmetic-bound
+> kernels, at scalar parity on byte-shuffle ones on that in-order core);
 > **s390x stays QEMU-validated for correctness with native perf pending** (no
 > GitHub-hosted IBM Z runner); and the suite additionally builds and passes its
 > differential + fuzz tests on a **seventh arch, ppc64 big-endian**, on real POWER9.
@@ -132,15 +141,18 @@ correct and measured honestly**. Every repo follows the same pipeline:
    amd64), **native arm64**, and **riscv64 / loong64 / ppc64le / s390x under
    `qemu-user`** (debian:trixie, `QEMU_CPU=power9` / `qemu`). Correctness is
    additionally confirmed on **real silicon via the [GCC Compile Farm][cfarm]**:
-   **ppc64le on a POWER10 host** (now with native throughput numbers — see
-   above) and **ppc64 big-endian on a POWER9 host** (a seventh validated arch:
-   the generic fallback path proven bit-exact big-endian, beyond s390x's vector
-   kernel). **s390x** alone remains **qemu-validated for correctness only** —
-   official vectors and byte-identical fuzz on the big-endian target — with
-   **native throughput pending** (no GitHub-hosted IBM Z runner). The headline
-   in-CI benchmark numbers come from **native CI** (amd64/arm64) and the
-   **POWER10 cfarm host** (ppc64le), never from emulation, and s390x is not
-   extrapolated.
+   **ppc64le on a POWER10 host** and **riscv64 on a SpacemiT X60 (RVV 1.0)
+   board** (both now with native throughput numbers — see above) and **ppc64
+   big-endian on a POWER9 host** (a seventh validated arch: the generic fallback
+   path proven bit-exact big-endian, beyond s390x's vector kernel). **s390x**
+   alone remains **qemu-validated for correctness only** — official vectors and
+   byte-identical fuzz on the big-endian target — with **native throughput
+   pending** (no GitHub-hosted IBM Z runner). The headline benchmark numbers
+   come from **native CI** (amd64/arm64) and the **POWER10 / SpacemiT-X60 cfarm
+   hosts** (ppc64le / riscv64), never from emulation, and s390x is not
+   extrapolated. The riscv64 figures are from a single *in-order* low-power core
+   (the only widely-available RVV 1.0 silicon) — an out-of-order RVV core would
+   likely lift the byte-shuffle kernels off parity too; reported honestly as-is.
 5. **100% statement coverage**, enforced as a CI gate on every repo and every
    arch job — including every dispatch branch (AVX2 / SSE / POPCNT / scalar
    fallback), driven directly by force tests. *(The generated `.s` kernels are
