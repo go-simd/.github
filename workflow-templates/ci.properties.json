@@ -1,0 +1,6 @@
+{
+  "name": "go-simd 6-arch + POWER8 + RVV-VLEN CI",
+  "description": "Hardened go-simd CI: native amd64/arm64 with a 100% coverage gate, QEMU-emulated riscv64/loong64/ppc64le/s390x, a POWER8 ISA-guard lane, an RVV multi-VLEN (128/256/512) sweep, and a go-asmgen-sync check.",
+  "iconName": "cpu",
+  "categories": ["Go"]
+}

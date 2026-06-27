@@ -1,0 +1,122 @@
+# go-simd hardened CI: 6-arch + POWER8 ISA-guard + RVV multi-VLEN + asmgen-sync.
+#
+# Adopt from GitHub: Actions -> New workflow -> "By go-simd" -> this template.
+# After adoption, edit the two PER-REPO knobs marked "EDIT:" below:
+#   1. the fuzz target name(s) in the `native` job (FuzzXxx -> your fuzz funcs),
+#   2. the generator command in the `asmgen-sync` job (the `go run *_gen.go`
+#      invocation that regenerates this repo's .s files).
+# Everything else (the arch matrix, the POWER8 lane, the RVV VLEN sweep, the 100%
+# coverage gate) is org-standard and should NOT be changed per repo.
+name: ci
+on:
+  push:
+    branches: [$default-branch]
+  pull_request:
+jobs:
+  # Native amd64 + arm64: full vet/test suite, 100% coverage gate, fuzzing.
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, arch: amd64 }
+          - { os: ubuntu-24.04-arm, arch: arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with: { go-version: stable }
+      - run: go vet ./...
+      - run: go test -v ./...
+      - name: coverage gate (100%)
+        # Org standard is a hard 100% line gate. If a repo genuinely cannot reach
+        # 100% on a given lane (e.g. arch-gated kernel fallbacks), lower ONLY this
+        # comparison string and document why in the repo (see the POWER8 lane note).
+        run: |
+          go test -covermode=atomic -coverprofile=cov.out ./...
+          pct=$(go tool cover -func=cov.out | awk '/^total:/{print $3}')
+          echo "coverage=$pct"
+          [ "$pct" = "100.0%" ] || { echo "coverage below 100%"; exit 1; }
+      # EDIT: replace FuzzXxx with this repo's fuzz target(s); add a line per target.
+      - run: go test -run '^$' -fuzz FuzzXxx -fuzztime 20s ./...
+
+  # Emulated big-endian / non-x86 arches via QEMU. The riscv64 entries sweep VLEN
+  # to catch VLMAX-portability bugs; the loong64/ppc64le/s390x entries pin a CPU
+  # model. ppc64le here runs POWER9 (ISA 3.0); the POWER8 contract is a separate
+  # job below.
+  emulated:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # riscv64 RVV: sweep VLEN so VLMAX-portability bugs are caught. VLMAX at
+          # SEW=8/LMUL=1 is VLEN/8, so the three lanes drive VLMAX=16/32/64. A
+          # gather-sentinel sized for one VLEN (e.g. 16, fine at vlen=128) reads
+          # an in-range element at a larger VLEN (vlen=256 -> VLMAX=32, the real
+          # SpacemiT X60); the vlen=256/512 lanes expose that class. vext_spec=v1.0
+          # pins the ratified RVV 1.0 the kernels target.
+          - { arch: riscv64, image: "debian:trixie", qemu: "rv64,v=true,vlen=128,vext_spec=v1.0" }
+          - { arch: riscv64, image: "debian:trixie", qemu: "rv64,v=true,vlen=256,vext_spec=v1.0" }
+          - { arch: riscv64, image: "debian:trixie", qemu: "rv64,v=true,vlen=512,vext_spec=v1.0" }
+          - { arch: loong64, image: "ghcr.io/loong64/debian:trixie", qemu: "la464" }
+          - { arch: ppc64le, image: "debian:trixie", qemu: "power9" }
+          - { arch: s390x,   image: "debian:trixie", qemu: "qemu" }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with: { go-version: stable }
+      - run: docker run --privileged --rm tonistiigi/binfmt --install all
+      - run: CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} go test -c -cover -o /tmp/t.test .
+      - run: docker run --rm --platform linux/${{ matrix.arch }} -e QEMU_CPU=${{ matrix.qemu }} -v /tmp:/t ${{ matrix.image }} /t/t.test -test.v -test.coverprofile=/t/cov.out
+      - name: coverage gate (100%)
+        run: |
+          pct=$(go tool cover -func=/tmp/cov.out | awk '/^total:/{print $3}')
+          echo "coverage=$pct"
+          [ "$pct" = "100.0%" ] || { echo "coverage below 100%"; exit 1; }
+
+  # POWER8 ISA-guard lane. The `emulated` ppc64le job runs the POWER9 model, so an
+  # ISA-3.0 op illegal on POWER8 (LXVB16X/STXVB16X/CNTTZD) slips through there and
+  # only SIGILLs on a real POWER8 (cfarm112). This lane runs the SAME ppc64le test
+  # binary under QEMU_CPU=power8 (qemu-user honors QEMU_CPU; power8 == power8e ==
+  # power8_v2.0): if a VSX kernel emits an ISA-3.0 op without a POWER9 dispatch
+  # gate, it SIGILLs here. No 100% coverage gate: on POWER8 a properly-gated kernel
+  # takes the scalar fallback (kernel branch uncovered, ~93%); coverage is enforced
+  # by the POWER9 `emulated` lane. The contract here is "must not SIGILL on POWER8".
+  emulated-ppc64le-power8:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with: { go-version: stable }
+      - run: docker run --privileged --rm tonistiigi/binfmt --install all
+      - run: CGO_ENABLED=0 GOOS=linux GOARCH=ppc64le go test -c -cover -o /tmp/t.test .
+      - name: run ppc64le binary on POWER8 (must not SIGILL)
+        run: docker run --rm --platform linux/ppc64le -e QEMU_CPU=power8 -v /tmp:/t debian:trixie /t/t.test -test.v
+
+  # go-asmgen-sync. The committed *.s assembly is generated from the *_gen.go
+  # programs by go-asmgen. This lane regenerates and fails if the working tree
+  # drifts, so a hand-edited .s (or a stale .s after a generator change) cannot be
+  # merged. Keeps the checked-in assembly provably equal to its generator.
+  asmgen-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with: { go-version: stable }
+      # EDIT: replace with this repo's generator command(s). Each *_gen.go is a
+      # `//go:build ignore` main that writes its sibling .s; run them all, e.g.:
+      #   for g in *_gen.go; do go run "$g"; done
+      # If your generators are wired via `go generate`, use `go generate ./...`.
+      - name: regenerate assembly
+        run: |
+          for g in $(git ls-files '*_gen.go'); do
+            echo "go run $g"
+            go run "$g"
+          done
+      - name: verify committed assembly is in sync
+        run: |
+          if ! git diff --exit-code; then
+            echo "::error::generated .s is out of sync with *_gen.go; run the generators and commit"
+            exit 1
+          fi
