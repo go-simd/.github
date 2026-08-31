@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Workflows parse
+        run: |
+          curl -sSL -o actionlint.tar.gz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
+          tar xzf actionlint.tar.gz actionlint
+          ./actionlint .github/workflows/*.yml
+
+      - name: config.js parses
+        run: node --check config.js
+
+      # The Renovate config is validated ALONE, in an empty directory, because
+      # that is how the container sees it: renovatebot/github-action mounts the
+      # configuration file BY ITSELF --
+      #
+      #     --volume <configurationFile>:/github-action/config.js
+      #
+      # so a `require('./sibling')` works here, passes a validator run in the
+      # checkout, and still kills every scheduled run with
+      # "FATAL: Error parsing config file" -- a message that names no path and
+      # reads like a syntax error. Validating in place would not catch it.
+      # go-attest/renovate-runner lost both of its runs to exactly this.
+      - name: Renovate config validates, as the container sees it
+        run: |
+          iso="$(mktemp -d)"
+          cp config.js default.json "$iso/"
+          cd "$iso"
+          npx --yes --package renovate@latest renovate-config-validator config.js default.json
