@@ -46,10 +46,11 @@ runs the generic path); proven correctness now spans seven architectures.
 
 Two results from the six-arch port are worth singling out:
 
-- **base32 gets real SIMD on ppc64le and s390x where arm64 could not.** The
+- **base32 got real SIMD on ppc64le and s390x before arm64 could.** The
   per-char 5-bit extraction needs a register-variable vector shift and an
-  integer vector multiply — neither of which Go's arm64 assembler exposes, so
-  the NEON port was shelved. POWER's **`VSRH`** (per-lane variable right shift)
+  integer vector multiply, which Go's arm64 assembler only exposed from Go 1.27;
+  with the floor at 1.27.1, arm64 now runs NEON encode and decode too (decode
+  ~25× the stdlib at 1 MiB). POWER's **`VSRH`** (per-lane variable right shift)
   and IBM Z's **`VMLHH`** (integer vector multiply-high) are *exactly* those
   primitives, so both run the **full** amd64 spread-extract kernel.
 - **s390x is big-endian, and every kernel is bit-exact there.** The whole suite
@@ -71,7 +72,7 @@ such. The credibility is the honesty.
 | Repo | Accelerates | Honest headline | CI · Coverage |
 |------|-------------|-----------------|---------------|
 | [**base64**](https://github.com/go-simd/base64) | `encoding/base64` | encode **~17× stdlib**, **beats `emmansun/base64` ~5–6%** (cycle-model-guided); SIMD **decode** too — **beats emmansun decode on amd64** (~1.3×); arm64 encode now **ties emmansun** via `VLD3`/`VST4` | [![CI](https://github.com/go-simd/base64/actions/workflows/ci.yml/badge.svg)](https://github.com/go-simd/base64/actions/workflows/ci.yml) ![cov](https://img.shields.io/badge/coverage-100%25-brightgreen) |
-| [**base32**](https://github.com/go-simd/base32) | `encoding/base32` | encode **~7.9× stdlib** (AVX2); **real SIMD on ppc64le `VSRH` + s390x `VMLHH` where arm64 can't**; now SIMD **decode** too + arm64 NEON encode on **Go 1.27** (`VUMULL`); no prior pure-Go SIMD base32 exists | [![CI](https://github.com/go-simd/base32/actions/workflows/ci.yml/badge.svg)](https://github.com/go-simd/base32/actions/workflows/ci.yml) ![cov](https://img.shields.io/badge/coverage-100%25-brightgreen) |
+| [**base32**](https://github.com/go-simd/base32) | `encoding/base32` | encode **~7.9× stdlib** (AVX2); **real SIMD on ppc64le `VSRH` + s390x `VMLHH`**; SIMD **decode** too, and arm64 NEON encode + decode (decode ~25× at 1 MiB); no prior pure-Go SIMD base32 exists | [![CI](https://github.com/go-simd/base32/actions/workflows/ci.yml/badge.svg)](https://github.com/go-simd/base32/actions/workflows/ci.yml) ![cov](https://img.shields.io/badge/coverage-100%25-brightgreen) |
 | [**hex**](https://github.com/go-simd/hex) | `encoding/hex` | **beats `tmthrgd/go-hex` both ways** — encode 20.4×, decode 6.24× stdlib (1.37× over tmthrgd) | [![CI](https://github.com/go-simd/hex/actions/workflows/ci.yml/badge.svg)](https://github.com/go-simd/hex/actions/workflows/ci.yml) ![cov](https://img.shields.io/badge/coverage-100%25-brightgreen) |
 | [**utf8**](https://github.com/go-simd/utf8) | `unicode/utf8` | `Valid` **~19× stdlib**, edges `stuartcarnie/go-simd` ~3.5% (Lemire/Keiser) | [![CI](https://github.com/go-simd/utf8/actions/workflows/ci.yml/badge.svg)](https://github.com/go-simd/utf8/actions/workflows/ci.yml) ![cov](https://img.shields.io/badge/coverage-100%25-brightgreen) |
 | [**adler32**](https://github.com/go-simd/adler32) | `hash/adler32` | **~12–14× stdlib**, but **~7% behind `mhr3/adler32-simd` — near-parity, honest** | [![CI](https://github.com/go-simd/adler32/actions/workflows/ci.yml/badge.svg)](https://github.com/go-simd/adler32/actions/workflows/ci.yml) ![cov](https://img.shields.io/badge/coverage-100%25-brightgreen) |
